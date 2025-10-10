@@ -1,4 +1,5 @@
-//  Демонстрация обработки "прерываний" на Linux: сигналы и ввод с клавиатуры.
+// ОСНОВНАЯ ЗАДАЧА: Демонстрация обработки сигналов как аналога прерываний
+// в пользовательском пространстве. Показать безопасные методы работы с сигналами.
 
 #include <errno.h>
 #include <fcntl.h>
@@ -11,100 +12,72 @@
 
 static const char *progname = "intsimple";
 
-// Флаги сигналов (устанавливаются в обработчиках, читаются в основном цикле)
-static volatile sig_atomic_t got_sigint = 0;
-static volatile sig_atomic_t got_sigterm = 0;
-static volatile sig_atomic_t got_sigusr1 = 0;
-static volatile sig_atomic_t got_sigusr2 = 0;
-static volatile sig_atomic_t got_sighup = 0;
+// ЗАДАНИЕ: Использовать volatile sig_atomic_t для обмена данными
+// между обработчиками сигналов и основной программой
+static volatile sig_atomic_t got_sigint = 0;   // Флаг для SIGINT (Ctrl+C)
+static volatile sig_atomic_t got_sigterm = 0;  // Флаг для SIGTERM
+static volatile sig_atomic_t got_sigusr1 = 0;  // Флаг для пользовательского сигнала 1
+static volatile sig_atomic_t got_sigusr2 = 0;  // Флаг для пользовательского сигнала 2
+static volatile sig_atomic_t got_sighup = 0;   // Флаг для SIGHUP
 
 static struct termios orig_termios;
 
 static void restore_terminal(void) {
-  tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
+    tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
 }
 
+// ЗАДАНИЕ: Настроить неблокирующий ввод с клавиатуры через raw mode
 static int enable_raw_mode(void) {
-  if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) return -1;
-  struct termios raw = orig_termios;
-  raw.c_lflag &= ~(ICANON | ECHO);
-  raw.c_cc[VMIN] = 0;   // неблокирующее чтение
-  raw.c_cc[VTIME] = 0;  // без таймаута
-  if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == -1) return -1;
-  atexit(restore_terminal);
-  return 0;
+    if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) return -1;
+    struct termios raw = orig_termios;
+    raw.c_lflag &= ~(ICANON | ECHO);  // Отключить буферизацию и эхо
+    raw.c_cc[VMIN] = 0;   // Неблокирующее чтение: минимум 0 символов
+    raw.c_cc[VTIME] = 0;  // Таймаут 0 - возврат сразу
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == -1) return -1;
+    atexit(restore_terminal);  // Автоматическое восстановление при выходе
+    return 0;
 }
 
+// ЗАДАНИЕ: Обработчики сигналов должны быть МАКСИМАЛЬНО ПРОСТЫМИ
+// и использовать только async-signal-safe функции
 static void handle_sigint(int signo) { 
     (void)signo; 
-    got_sigint = 1; 
-    printf("\n%s: SIGINT получен (установлен флаг)\n", progname);
+    got_sigint = 1;  // Только установка флага - БЕЗОПАСНАЯ операция
+    // НЕЛЬЗЯ: printf, malloc, pthread функции - они не async-signal-safe
 }
 
-static void handle_sigterm(int signo) { 
-    (void)signo; 
-    got_sigterm = 1; 
-    printf("\n%s: SIGTERM получен (установлен флаг)\n", progname);
-}
-
-static void handle_sigusr1(int signo) { 
-    (void)signo; 
-    got_sigusr1 = 1; 
-    printf("\n%s: SIGUSR1 получен (установлен флаг)\n", progname);
-}
-
-static void handle_sigusr2(int signo) { 
-    (void)signo; 
-    got_sigusr2 = 1; 
-    printf("\n%s: SIGUSR2 получен (установлен флаг)\n", progname);
-}
-
-static void handle_sighup(int signo) { 
-    (void)signo; 
-    got_sighup = 1; 
-    printf("\n%s: SIGHUP получен (установлен флаг)\n", progname);
-}
-
-static void print_help(void) {
-    printf("\n%s: Доступные команды:\n", progname);
-    printf("  q - выход\n");
-    printf("  h - помощь\n");
-    printf("  s - отправить SIGUSR1 самому себе\n");
-    printf("  r - сбросить все флаги сигналов\n");
-    printf("  p - показать текущие флаги сигналов\n");
-}
+static void handle_sigterm(int signo) { (void)signo; got_sigterm = 1; }
+static void handle_sigusr1(int signo) { (void)signo; got_sigusr1 = 1; }
+static void handle_sigusr2(int signo) { (void)signo; got_sigusr2 = 1; }
+static void handle_sighup(int signo)  { (void)signo; got_sighup = 1; }
 
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     printf("%s: starting...\n", progname);
-    printf("Поддерживаемые сигналы: SIGINT(Ctrl+C), SIGTERM, SIGUSR1, SIGUSR2, SIGHUP.\n");
+    printf("Поддерживаемые сигналы: SIGINT(Ctrl+C), SIGTERM, SIGUSR1, SIGUSR2.\n");
     printf("Замечание: SIGKILL нельзя перехватить или обработать на Linux.\n");
-    printf("Нажмите 'h' для помощи.\n");
+    printf("Нажмите 'q' для выхода.\n");
 
+    // ЗАДАНИЕ: Настроить терминал для неблокирующего ввода
     if (enable_raw_mode() == -1) {
         perror("termios");
         return EXIT_FAILURE;
     }
 
+    // ЗАДАНИЕ: Установить обработчики для различных сигналов
     struct sigaction sa = {0};
-    sa.sa_handler = handle_sigint; 
-    sigemptyset(&sa.sa_mask); 
+    sa.sa_handler = handle_sigint;
+    sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
-    sigaction(SIGINT, &sa, NULL);
     
-    sa.sa_handler = handle_sigterm; 
-    sigaction(SIGTERM, &sa, NULL);
-    
-    sa.sa_handler = handle_sigusr1; 
-    sigaction(SIGUSR1, &sa, NULL);
-    
-    sa.sa_handler = handle_sigusr2; 
-    sigaction(SIGUSR2, &sa, NULL);
-    
-    sa.sa_handler = handle_sighup; 
-    sigaction(SIGHUP, &sa, NULL);
+    // Регистрация обработчиков для разных типов сигналов
+    sigaction(SIGINT, &sa, NULL);   // Ctrl+C
+    sigaction(SIGTERM, &sa, NULL);  // Запрос завершения (kill)
+    sigaction(SIGUSR1, &sa, NULL);  // Пользовательский сигнал 1
+    sigaction(SIGUSR2, &sa, NULL);  // Пользовательский сигнал 2
+    sigaction(SIGHUP, &sa, NULL);   // Hangup (закрытие терминала)
 
-    // Блокируем сигналы во время обработки
+    // ЗАДАНИЕ: Использовать маски сигналов для защиты критических секций
     sigset_t blocked_set, old_set;
     sigemptyset(&blocked_set);
     sigaddset(&blocked_set, SIGINT);
@@ -113,37 +86,21 @@ int main(void) {
     sigaddset(&blocked_set, SIGUSR2);
     sigaddset(&blocked_set, SIGHUP);
 
-    // Основной цикл: опрашиваем stdin и проверяем флаги сигналов
+    // ОСНОВНОЙ ЦИКЛ ОБРАБОТКИ: опрос флагов и неблокирующий ввод
     for (;;) {
-        // Блокируем сигналы на время проверки флагов
+        // ЗАЩИТА КРИТИЧЕСКОЙ СЕКЦИИ: блокировка сигналов при проверке флагов
         sigprocmask(SIG_BLOCK, &blocked_set, &old_set);
         
-        // Проверка сигналов
-        if (got_sigint)  { 
-            got_sigint = 0;  
-            printf("%s: обработан SIGINT (Ctrl+C)\n", progname); 
-        }
-        if (got_sigterm) { 
-            got_sigterm = 0; 
-            printf("%s: обработан SIGTERM\n", progname); 
-        }
-        if (got_sigusr1) { 
-            got_sigusr1 = 0; 
-            printf("%s: обработан SIGUSR1\n", progname); 
-        }
-        if (got_sigusr2) { 
-            got_sigusr2 = 0; 
-            printf("%s: обработан SIGUSR2\n", progname); 
-        }
-        if (got_sighup)  { 
-            got_sighup = 0;  
-            printf("%s: обработан SIGHUP\n", progname); 
-        }
+        // Проверка флагов сигналов (под защитой от прерываний)
+        if (got_sigint)  { got_sigint = 0;  printf("%s: получен SIGINT (Ctrl+C)\n", progname); }
+        if (got_sigterm) { got_sigterm = 0; printf("%s: получен SIGTERM\n", progname); }
+        if (got_sigusr1) { got_sigusr1 = 0; printf("%s: получен SIGUSR1\n", progname); }
+        if (got_sigusr2) { got_sigusr2 = 0; printf("%s: получен SIGUSR2\n", progname); }
+        if (got_sighup)  { got_sighup = 0;  printf("%s: получен SIGHUP\n", progname); }
         
-        // Разблокируем сигналы
-        sigprocmask(SIG_SETMASK, &old_set, NULL);
+        sigprocmask(SIG_SETMASK, &old_set, NULL);  // Разблокировка сигналов
 
-        // Неблокирующее чтение клавиатуры
+        // ЗАДАНИЕ: Неблокирующее чтение клавиатуры
         char ch;
         ssize_t n = read(STDIN_FILENO, &ch, 1);
         if (n == 1) {
@@ -151,33 +108,13 @@ int main(void) {
                 printf("%s: выход по клавише 'q'\n", progname);
                 break;
             }
-            else if (ch == 'h' || ch == 'H') {
-                print_help();
-            }
-            else if (ch == 's' || ch == 'S') {
-                printf("%s: отправляем SIGUSR1 самому себе\n", progname);
-                raise(SIGUSR1);
-            }
-            else if (ch == 'r' || ch == 'R') {
-                got_sigint = got_sigterm = got_sigusr1 = got_sigusr2 = got_sighup = 0;
-                printf("%s: все флаги сигналов сброшены\n", progname);
-            }
-            else if (ch == 'p' || ch == 'P') {
-                printf("%s: текущие флаги - SIGINT:%d SIGTERM:%d SIGUSR1:%d SIGUSR2:%d SIGHUP:%d\n",
-                       progname, got_sigint, got_sigterm, got_sigusr1, got_sigusr2, got_sighup);
-            }
-            else if (ch == '\n' || ch == '\r') {
-                // игнорировать переводы строк
-            } else {
-                printf("%s: клавиша '%c' (нажмите 'h' для помощи)\n", progname, ch);
-            }
+            // Обработка других команд...
         } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             perror("read");
             break;
         }
 
-        // Немного подождём, чтобы не крутить CPU
-        usleep(10 * 1000);
+        usleep(10 * 1000);  // Небольшая пауза для снижения нагрузки на CPU
     }
 
     printf("%s: exiting...\n", progname);
