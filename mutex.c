@@ -1,4 +1,7 @@
-// mutex.c - Решение проблемы доступа к общей переменной с помощью мьютексов
+// ОСНОВНАЯ ЗАДАЧА: Продемонстрировать проблему гонки данных (race condition)
+// и её решение с помощью мьютексов.
+// Без мьютексов: var1 и var2 рассинхронизируются.
+// С мьютексами: var1 всегда равен var2.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,112 +9,96 @@
 #include <sched.h>
 #include <unistd.h>
 
-#define NumThreads      16       // позже установите значение 16
+#define NumThreads 4       // ЗАДАНИЕ: Создать несколько конкурентных потоков
 
-volatile int     var1;
-volatile int     var2;
-pthread_mutex_t mutex;          // мьютекс для синхронизации доступа
+volatile int var1;         // РАЗДЕЛЯЕМЫЙ РЕСУРС 1 - требует синхронизации
+volatile int var2;         // РАЗДЕЛЯЕМЫЙ РЕСУРС 2 - должен быть равен var1
+pthread_mutex_t mutex;     // МЬЮТЕКС - основной механизм синхронизации
 
-void    *update_thread (void *);
-char    *progname = "mutex";
+void *update_thread(void *);
+char *progname = "mutex";
 
-int main ()
-{
-    pthread_t           threadID [NumThreads];  // хранит ID потоков
-    pthread_attr_t      attrib;                 // атрибуты планирования
-    struct sched_param  param;                  // для установки приоритета
-    int                 i, policy;
+int main() {
+    pthread_t threadID[NumThreads];
+    pthread_attr_t attrib;
+    struct sched_param param;
+    int i, policy;
     
-    // Инициализация мьютекса
+    // ЗАДАНИЕ: Инициализировать мьютекс для защиты критических секций
     if (pthread_mutex_init(&mutex, NULL) != 0) {
         printf("%s: ошибка инициализации мьютекса\n", progname);
         exit(1);
     }
     
-    setvbuf (stdout, NULL, _IOLBF, 0);
-    var1 = var2 = 0;        /* инициализация известных */
-    printf ("%s:  starting; creating threads\n", progname);
-    /*
-     *  we want to create the new threads using Round Robin
-     *  scheduling, and a lowered priority, so set up a thread 
-     *  attributes structure.  We use a lower priority since these
-     *  threads will be hogging the CPU
-    */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    var1 = var2 = 0;        // Инициализация разделяемых ресурсов
+    printf("%s: starting; creating threads\n", progname);
+    
+    // ЗАДАНИЕ: Настроить планирование потоков для лучшего наблюдения эффектов
+    pthread_getschedparam(pthread_self(), &policy, &param);
+    pthread_attr_init(&attrib);
+    pthread_attr_setinheritsched(&attrib, PTHREAD_EXPLICIT_SCHED); // Явное управление
+    pthread_attr_setschedpolicy(&attrib, SCHED_RR);                // Round Robin
+    param.sched_priority -= 2;        // Снизить приоритет рабочих потоков
+    pthread_attr_setschedparam(&attrib, &param);
 
-    pthread_getschedparam (pthread_self(), &policy, &param);
-    pthread_attr_init (&attrib);
-    pthread_attr_setinheritsched (&attrib, PTHREAD_EXPLICIT_SCHED);
-    pthread_attr_setschedpolicy (&attrib, SCHED_RR);
-    param.sched_priority -= 2;        // Снизить приоритет на 2 уровня
-    pthread_attr_setschedparam (&attrib, &param);
-
-    // Создаем потоки. С каждым завершением вызова pthread_create запускается поток.
+    // ЗАДАНИЕ: Создать несколько потоков, конкурирующих за общие ресурсы
     for (i = 0; i < NumThreads; i++) {
-        pthread_create (&threadID [i], &attrib, &update_thread, (void *)(long)i);
+        pthread_create(&threadID[i], &attrib, &update_thread, (void *)(long)i);
     }
 
-    sleep (20);
-    printf ("%s:  stopping; cancelling threads\n", progname);
+    sleep(20);  // Дать потокам время поработать и проявить проблемы синхронизации
+    
+    // ЗАДАНИЕ: Корректно завершить потоки и проверить итоговое состояние
+    printf("%s: stopping; cancelling threads\n", progname);
     for (i = 0; i < NumThreads; i++) {
-      pthread_cancel (threadID [i]);
+        pthread_cancel(threadID[i]);  // Принудительное завершение
     }
     
-    // Ожидаем завершения всех потоков
+    // Ожидание фактического завершения потоков
     for (i = 0; i < NumThreads; i++) {
         pthread_join(threadID[i], NULL);
     }
     
-    // Уничтожаем мьютекс
-    pthread_mutex_destroy(&mutex);
+    pthread_mutex_destroy(&mutex);  // Освобождение ресурсов мьютекса
     
-    printf ("%s:  all done, var1 is %d, var2 is %d\n", progname, var1, var2);
-    fflush (stdout);
-    sleep (1);
-    exit (0);
+    // ЗАДАНИЕ: Показать итоговые значения - должны быть равны при корректной синхронизации
+    printf("%s: all done, var1 is %d, var2 is %d\n", progname, var1, var2);
+    exit(0);
 }
 
-/*
- *  Текущий поток.
- *  The thread ensures that var1 == var2.  If this is not the
- *  case, the thread sets var1 = var2, and prints a message.
- *  Var1 and Var2 are incremented.
- *  Looking at the source, if there were no "synchronization" problems,
- *  then var1 would always be equal to var2.  Run this program and see
- *  what the actual result is...
-*/
-
-void do_work()
-{
+void do_work() {
     static int var3;
     var3++;
-    /* For faster/slower processors, may need to tune this program by
-     * modifying the frequency of this printf -- add/remove a 0
-     */
-    if ( !(var3 % 10000000) ) 
-        printf ("%s: thread %lu did some work\n", progname, (unsigned long)pthread_self());
+    // Имитация работы для увеличения вероятности переключения контекста
+    if (!(var3 % 10000000)) 
+        printf("%s: thread %lu did some work\n", progname, (unsigned long)pthread_self());
 }
 
-void *update_thread (void *i)
-{
-    //Асинхронная отмена
+void *update_thread(void *i) {
     pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+    
+    // ЗАДАНИЕ: В бесконечном цикле демонстрировать проблему и её решение
     while (1) {
-        // Захват мьютекса
-        pthread_mutex_lock(&mutex);
+        // КРИТИЧЕСКАЯ СЕКЦИЯ - начинается с захвата мьютекса
+        pthread_mutex_lock(&mutex);  // ЗАЩИТА: только один поток выполняет дальше
         
+        // ПРОВЕРКА ЦЕЛОСТНОСТИ: var1 должен равняться var2
         if (var1 != var2) {
-            printf ("%s:  thread %ld, var1 (%d) is not equal to var2 (%d)!\n",
-                    progname, (long) i, var1, var2);
-            var1 = var2;
+            // БЕЗ МЬЮТЕКСА: это сообщение будет появляться часто
+            printf("%s: thread %ld, var1 (%d) is not equal to var2 (%d)!\n",
+                    progname, (long)i, var1, var2);
+            var1 = var2;  // Принудительное восстановление целостности
         }
-        /* do some work here */
-        do_work(); 
-        var1++;
-        //sched_yield(); /* for faster processors, to cause problem to happen */ 
-        var2++;
         
-        // Освобождаем мьютекс после работы с общими переменными
-        pthread_mutex_unlock(&mutex);
+        do_work();  // Имитация работы (может вызвать переключение контекста)
+        
+        // ИЗМЕНЕНИЕ РАЗДЕЛЯЕМЫХ РЕСУРСОВ - потенциальная точка гонки данных
+        var1++;  // Операция не атомарна: чтение-изменение-запись
+        // МЕЖДУ var1++ и var2++ может произойти переключение на другой поток!
+        var2++;  // Без мьютекса это приводит к рассинхронизации
+        
+        pthread_mutex_unlock(&mutex);  // Конец критической секции
     }
-    return (NULL);
+    return NULL;
 }
